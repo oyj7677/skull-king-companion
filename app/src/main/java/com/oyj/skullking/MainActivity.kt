@@ -3,19 +3,17 @@ package com.oyj.skullking
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.activity.viewModels
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -28,160 +26,278 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.oyj.skullking.data.DefaultActiveGameRepository
+import com.oyj.skullking.data.RoomActiveGameStore
+import com.oyj.skullking.data.SkullKingDatabase
+import com.oyj.skullking.domain.ActiveGame
+import com.oyj.skullking.domain.GameStatus
+import com.oyj.skullking.domain.Player
+import com.oyj.skullking.domain.RoundPlayerInput
+import com.oyj.skullking.presentation.GameViewModel
+import com.oyj.skullking.presentation.GameViewModelFactory
 
-data class Player(val id: Int, val name: String, val total: Int = 0)
-data class RoundResult(val round: Int, val player: String, val bid: Int, val tricks: Int, val score: Int)
+private const val MIN_PLAYERS = 2
+private const val MAX_PLAYERS = 8
 
 class MainActivity : ComponentActivity() {
+    private val viewModel: GameViewModel by viewModels {
+        val database = SkullKingDatabase.create(applicationContext)
+        GameViewModelFactory(DefaultActiveGameRepository(RoomActiveGameStore(database)))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { SkullKingApp() }
+        setContent { SkullKingApp(viewModel) }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SkullKingApp() {
-    val players = remember { mutableStateListOf<Player>() }
-    val history = remember { mutableStateListOf<RoundResult>() }
-    var currentRound by remember { mutableIntStateOf(1) }
-    var showPlayerDialog by remember { mutableStateOf(false) }
-    var scoringPlayer by remember { mutableStateOf<Player?>(null) }
+private fun SkullKingApp(viewModel: GameViewModel) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val game = uiState.game
+    var confirmReplacement by rememberSaveable { mutableStateOf(false) }
+    var editingCompletedGame by rememberSaveable(game?.id) { mutableStateOf(false) }
 
     MaterialTheme {
-        Scaffold(
-            topBar = { CenterAlignedTopAppBar(title = { Text("🏴‍☠️ Skull King") }) }
-        ) { padding ->
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+        Scaffold(topBar = { CenterAlignedTopAppBar(title = { Text("🏴‍☠️ Skull King") }) }) { padding ->
+            Column(
+                modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                item {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text("라운드 $currentRound", style = MaterialTheme.typography.headlineSmall)
-                            Text("각 플레이어의 입찰과 획득 트릭을 기록하세요.")
-                        }
-                        Button(onClick = { currentRound += 1 }) { Text("다음 라운드") }
-                    }
-                }
-                item {
-                    Button(onClick = { showPlayerDialog = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text("플레이어 추가")
-                    }
-                }
-                if (players.isEmpty()) {
-                    item { EmptyState() }
-                } else {
-                    items(players, key = { it.id }) { player ->
-                        PlayerCard(player = player, onRecordScore = { scoringPlayer = player })
-                    }
-                }
-                if (history.isNotEmpty()) {
-                    item { Text("최근 기록", style = MaterialTheme.typography.titleLarge) }
-                    items(history.takeLast(10).reversed()) { result ->
-                        Text("${result.player}: 입찰 ${result.bid} · 획득 ${result.tricks} · ${signedScore(result.score)}점 (R${result.round})")
-                    }
+                uiState.error?.let { ErrorBanner(it, viewModel::clearError) }
+                when {
+                    uiState.isLoading -> LoadingState()
+                    game == null -> SetupScreen(viewModel::startNewGame)
+                    game.status == GameStatus.Completed && !editingCompletedGame -> ResultScreen(
+                        game = game,
+                        onEditRounds = { editingCompletedGame = true },
+                        onStartReplacement = { confirmReplacement = true },
+                    )
+                    else -> ScoreboardScreen(
+                        game = game,
+                        onSaveRound = viewModel::saveRound,
+                        onShowResults = { editingCompletedGame = false },
+                    )
                 }
             }
         }
     }
 
-    if (showPlayerDialog) {
-        AddPlayerDialog(
-            onDismiss = { showPlayerDialog = false },
-            onAdd = { name ->
-                players += Player(id = (players.maxOfOrNull { it.id } ?: 0) + 1, name = name)
-                showPlayerDialog = false
-            }
-        )
-    }
-    scoringPlayer?.let { player ->
-        ScoreDialog(
-            player = player,
-            round = currentRound,
-            onDismiss = { scoringPlayer = null },
-            onSave = { bid, tricks ->
-                val score = ScoreCalculator.calculate(currentRound, bid, tricks)
-                val index = players.indexOfFirst { it.id == player.id }
-                players[index] = player.copy(total = player.total + score)
-                history += RoundResult(currentRound, player.name, bid, tricks, score)
-                scoringPlayer = null
-            }
+    if (confirmReplacement) {
+        AlertDialog(
+            onDismissRequest = { confirmReplacement = false },
+            title = { Text("새 게임을 시작할까요?") },
+            text = { Text("현재 완료된 게임 결과는 이 기기에서 교체됩니다.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReplacement = false
+                    viewModel.discardGame()
+                }) { Text("새 게임 시작") }
+            },
+            dismissButton = { TextButton(onClick = { confirmReplacement = false }) { Text("취소") } },
         )
     }
 }
 
 @Composable
-private fun EmptyState() {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            "먼저 함께 게임할 플레이어를 추가해 보세요.",
-            modifier = Modifier.padding(20.dp),
-            style = MaterialTheme.typography.bodyLarge
-        )
+private fun SetupScreen(onStartGame: (List<String>, Int) -> Unit) {
+    val names = remember { mutableStateListOf("", "") }
+    var totalRounds by rememberSaveable { mutableIntStateOf(10) }
+
+    Text("게임 설정", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    Text("플레이어 구성과 라운드 수는 첫 라운드가 시작되면 변경할 수 없습니다.")
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(names.size) { index ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = names[index],
+                    onValueChange = { names[index] = it },
+                    label = { Text("플레이어 ${index + 1}") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+                if (names.size > MIN_PLAYERS) {
+                    TextButton(onClick = { names.removeAt(index) }) { Text("삭제") }
+                }
+            }
+        }
+        item {
+            if (names.size < MAX_PLAYERS) {
+                TextButton(onClick = { names += "" }) { Text("플레이어 추가") }
+            }
+        }
+    }
+    NumberEditor(label = "총 라운드", value = totalRounds, minimum = 1, onValueChange = { totalRounds = it })
+    Button(
+        onClick = { onStartGame(names.toList(), totalRounds) },
+        enabled = names.all { it.isNotBlank() },
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text("게임 시작") }
+}
+
+@Composable
+private fun ScoreboardScreen(
+    game: ActiveGame,
+    onSaveRound: (Int, List<RoundPlayerInput>) -> Unit,
+    onShowResults: () -> Unit,
+) {
+    var roundNumber by rememberSaveable(game.id) { mutableIntStateOf(game.firstIncompleteRound()) }
+    val storedRound = game.rounds.firstOrNull { it.number == roundNumber }
+    var drafts by remember(game.id, roundNumber, storedRound) {
+        mutableStateOf(game.players.associate { player ->
+            val score = storedRound?.scores?.firstOrNull { it.playerId == player.id }
+            player.id to ScoreDraft(score?.bid, score?.tricks, score?.bonusScore)
+        })
+    }
+    val canSave = drafts.values.all { it.bid != null && it.tricks != null }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("라운드 $roundNumber / ${game.totalRounds}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = { roundNumber -= 1 }, enabled = roundNumber > 1) { Text("이전") }
+        TextButton(onClick = { roundNumber += 1 }, enabled = roundNumber < game.totalRounds) { Text("다음") }
+    }
+    Text("입찰과 획득이 같을 때만 추가점수를 입력할 수 있습니다.")
+    ScoreboardHeader()
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(game.players, key = { it.id }) { player ->
+            val draft = drafts.getValue(player.id)
+            RoundInputRow(
+                player = player,
+                draft = draft,
+                maxTricks = roundNumber,
+                onUpdate = { updated -> drafts = drafts + (player.id to updated) },
+            )
+        }
+    }
+    Button(
+        onClick = {
+            onSaveRound(
+                roundNumber,
+                game.players.map { player -> drafts.getValue(player.id).toInput(player.id) },
+            )
+        },
+        enabled = canSave,
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text(if (storedRound == null) "라운드 저장" else "라운드 수정 저장") }
+    if (game.status == GameStatus.Completed) {
+        TextButton(onClick = onShowResults, modifier = Modifier.fillMaxWidth()) { Text("결과로 돌아가기") }
     }
 }
 
 @Composable
-private fun PlayerCard(player: Player, onRecordScore: () -> Unit) {
+private fun ScoreboardHeader() {
+    Row(modifier = Modifier.horizontalScroll(rememberScrollState()).fillMaxWidth()) {
+        HeaderCell("플레이어", 150)
+        HeaderCell("입찰", 125)
+        HeaderCell("획득", 125)
+        HeaderCell("추가점수", 140)
+        HeaderCell("예상 점수", 120)
+    }
+}
+
+@Composable
+private fun HeaderCell(text: String, width: Int) {
+    Text(text, fontWeight = FontWeight.Bold, modifier = Modifier.width(width.dp).padding(8.dp))
+}
+
+@Composable
+private fun RoundInputRow(player: Player, draft: ScoreDraft, maxTricks: Int, onUpdate: (ScoreDraft) -> Unit) {
+    val matched = draft.bid != null && draft.bid == draft.tricks
+    val preview = if (draft.bid != null && draft.tricks != null) {
+        ScoreCalculator.calculate(
+            RoundScoreInput(maxTricks, draft.bid, draft.tricks, if (matched) draft.roundBonus ?: 0 else 0),
+        ).totalScore
+    } else null
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
-                Text(player.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("누적 ${signedScore(player.total)}점")
+            Text(player.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.width(150.dp))
+            CompactNumberEditor(draft.bid, maxTricks) { onUpdate(draft.copy(bid = it)) }
+            CompactNumberEditor(draft.tricks, maxTricks) { onUpdate(draft.copy(tricks = it)) }
+            if (matched) {
+                CompactNumberEditor(draft.roundBonus ?: 0, 999) { onUpdate(draft.copy(roundBonus = it)) }
+            } else {
+                Text("입찰 성공 시 입력", modifier = Modifier.width(140.dp).padding(8.dp), style = MaterialTheme.typography.bodySmall)
             }
-            Button(onClick = onRecordScore) { Text("점수 기록") }
+            Text(preview?.let(::signedScore) ?: "—", modifier = Modifier.width(120.dp).padding(8.dp), fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
-private fun AddPlayerDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("플레이어 추가") },
-        text = { OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("이름") }) },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onAdd(name.trim()) }) { Text("추가") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
-    )
+private fun CompactNumberEditor(value: Int?, maximum: Int, onValueChange: (Int) -> Unit) {
+    Row(modifier = Modifier.width(125.dp), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { onValueChange(((value ?: 0) - 1).coerceAtLeast(0)) }) { Text("−") }
+        Text(value?.toString() ?: "—", modifier = Modifier.width(30.dp), style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = { onValueChange(((value ?: -1) + 1).coerceAtMost(maximum)) }) { Text("+") }
+    }
 }
 
 @Composable
-private fun ScoreDialog(player: Player, round: Int, onDismiss: () -> Unit, onSave: (Int, Int) -> Unit) {
-    var bid by remember { mutableStateOf("") }
-    var tricks by remember { mutableStateOf("") }
-    val bidValue = bid.toIntOrNull()
-    val tricksValue = tricks.toIntOrNull()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${player.name} · 라운드 $round") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = bid, onValueChange = { bid = it }, label = { Text("입찰 트릭") })
-                OutlinedTextField(value = tricks, onValueChange = { tricks = it }, label = { Text("획득 트릭") })
-                Text("정확히 맞추면 보너스 점수가 적용됩니다.", style = MaterialTheme.typography.bodySmall)
+private fun NumberEditor(label: String, value: Int, minimum: Int, onValueChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.width(110.dp))
+        TextButton(onClick = { onValueChange((value - 1).coerceAtLeast(minimum)) }) { Text("−") }
+        Text(value.toString(), style = MaterialTheme.typography.titleLarge, modifier = Modifier.width(40.dp))
+        TextButton(onClick = { onValueChange(value + 1) }) { Text("+") }
+    }
+}
+
+@Composable
+private fun ResultScreen(game: ActiveGame, onEditRounds: () -> Unit, onStartReplacement: () -> Unit) {
+    Text("최종 결과", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(game.players.sortedByDescending { it.totalScore }) { player ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(player.name, style = MaterialTheme.typography.titleLarge)
+                    Text("${signedScore(player.totalScore)}점", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(bidValue!!, tricksValue!!) }, enabled = bidValue != null && tricksValue != null && bidValue >= 0 && tricksValue >= 0) {
-                Text("저장")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+        }
+    }
+    Button(onClick = onEditRounds, modifier = Modifier.fillMaxWidth()) { Text("라운드 수정") }
+    Button(onClick = onStartReplacement, modifier = Modifier.fillMaxWidth()) { Text("새 게임 시작") }
+}
+
+@Composable
+private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = onDismiss) { Text("닫기") }
+        }
+    }
+}
+
+@Composable
+private fun LoadingState() {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        CircularProgressIndicator()
+    }
+}
+
+private data class ScoreDraft(val bid: Int? = null, val tricks: Int? = null, val roundBonus: Int? = null) {
+    fun toInput(playerId: Long): RoundPlayerInput = RoundPlayerInput(
+        playerId = playerId,
+        bid = requireNotNull(bid),
+        tricks = requireNotNull(tricks),
+        roundBonus = if (bid == tricks) roundBonus ?: 0 else 0,
     )
 }
+
+private fun ActiveGame.firstIncompleteRound(): Int =
+    (1..totalRounds).firstOrNull { number -> rounds.none { it.number == number } } ?: totalRounds
 
 private fun signedScore(score: Int): String = if (score > 0) "+$score" else score.toString()
