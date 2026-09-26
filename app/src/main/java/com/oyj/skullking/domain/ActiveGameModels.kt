@@ -38,6 +38,12 @@ data class RoundPlayerInput(
     val roundBonus: Int,
 )
 
+object GameConstraints {
+    const val MinPlayers = 2
+    const val MaxPlayers = 8
+    const val DefaultTotalRounds = 10
+}
+
 enum class GameStatus {
     InProgress,
     Completed,
@@ -45,4 +51,10 @@ enum class GameStatus {
 
 enum class RuleSet {
     Standard,
+    NoCardBonus,
+
+    ;
+
+    val allowsRoundBonus: Boolean
+        get() = this == Standard
 }

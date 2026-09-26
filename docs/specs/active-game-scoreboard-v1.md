@@ -12,7 +12,7 @@
 
 1. As a 게임 진행자, I want to 시작 전 Player를 2~8명으로 추가하고 이름을 편집할 수 있도록, so that 실제 참가자에 맞는 점수판을 만들 수 있다.
 2. As a 게임 진행자, I want to 총 Round 수를 기본값 10에서 시작 전에 변경할 수 있도록, so that 우리 모임의 게임 길이에 맞출 수 있다.
-3. As a 게임 진행자, I want to 시작 전에 Rule Set을 확인하도록, so that 점수 계산의 전제가 게임 내내 일관되게 유지된다.
+3. As a 게임 진행자, I want to 시작 전에 카드 보너스를 직접 입력할지 선택하도록, so that 점수 계산의 전제가 게임 내내 일관되게 유지된다.
 4. As a 게임 진행자, I want to 첫 Round를 시작하면 Player 구성이 잠기도록, so that 기록의 주체와 누적 순위가 바뀌지 않는다.
 5. As a Player, I want to 가로 태블릿 한 화면에서 모든 Player의 행을 볼 수 있도록, so that 입력 누락 없이 라운드 결과를 함께 확인할 수 있다.
 6. As a 게임 진행자, I want to 각 Player의 입찰과 획득 트릭을 입력하도록, so that 기본 라운드 점수가 계산된다.
@@ -36,7 +36,7 @@
 - SavedStateHandle은 저장 전 입력값, 선택된 편집 대상 같은 짧은 화면 상태에만 사용한다. Active Game의 영속 데이터는 Room에 보관한다.
 - 태블릿 가로 화면은 Player, 입찰, 획득, Round Bonus, 라운드 점수 열을 표시한다. 2~8개의 Player 행이 동시에 보여야 한다.
 - 입찰 성공 여부는 입찰과 획득 트릭이 같은지로 판단한다. 불일치하면 Round Bonus는 0점이며 입력하지 않는다.
-- 기본 Round Schedule은 1~10 Round다. Game 시작 시 총 Round 수를 설정할 수 있고, 시작 후에는 바꿀 수 없다.
+- 기본 Round Schedule은 1~10 Round다. Game 시작 시 총 Round 수와 카드 보너스 사용 여부를 설정할 수 있고, 시작 후에는 바꿀 수 없다.
 - Completed Game은 결과 화면을 유지한다. 새 게임 시작은 확인 후 기존 Active Game을 대체한다.
 
 ## Testing Decisions

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.oyj.skullking.data.ActiveGameRepository
 import com.oyj.skullking.domain.ActiveGame
 import com.oyj.skullking.domain.RoundPlayerInput
+import com.oyj.skullking.domain.RuleSet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,8 +31,8 @@ class GameViewModel(
 
     fun refresh() = launchAction { repository.getActiveGame() }
 
-    fun startNewGame(playerNames: List<String>, totalRounds: Int) =
-        launchAction { repository.startNewGame(playerNames, totalRounds) }
+    fun startNewGame(playerNames: List<String>, totalRounds: Int, ruleSet: RuleSet) =
+        launchAction { repository.startNewGame(playerNames, totalRounds, ruleSet) }
 
     fun saveRound(roundNumber: Int, entries: List<RoundPlayerInput>) =
         launchAction { repository.saveRound(roundNumber, entries) }

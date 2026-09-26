@@ -3,6 +3,7 @@ package com.oyj.skullking.data
 import com.oyj.skullking.ScoreCalculator
 import com.oyj.skullking.domain.ActiveGame
 import com.oyj.skullking.domain.GameStatus
+import com.oyj.skullking.domain.GameConstraints
 import com.oyj.skullking.domain.Player
 import com.oyj.skullking.domain.PlayerRoundScore
 import com.oyj.skullking.domain.Round
@@ -13,7 +14,7 @@ interface ActiveGameRepository {
     suspend fun getActiveGame(): ActiveGame?
     suspend fun startNewGame(
         playerNames: List<String>,
-        totalRounds: Int = DefaultActiveGameRepository.DefaultTotalRounds,
+        totalRounds: Int = GameConstraints.DefaultTotalRounds,
         ruleSet: RuleSet = RuleSet.Standard,
     ): ActiveGame
 
@@ -70,6 +71,8 @@ class DefaultActiveGameRepository(
         val roundScores = entries.map { input ->
             require(input.bid >= 0) { "Bid must be zero or greater" }
             require(input.tricks >= 0) { "Tricks must be zero or greater" }
+            require(input.bid <= roundNumber) { "Bid cannot exceed the round's trick limit" }
+            require(input.tricks <= roundNumber) { "Tricks cannot exceed the round's trick limit" }
             require(input.roundBonus >= 0) { "Round bonus must be zero or greater" }
 
             val baseScore = ScoreCalculator.calculate(
@@ -77,7 +80,7 @@ class DefaultActiveGameRepository(
                 bid = input.bid,
                 tricks = input.tricks,
             )
-            val bonusScore = if (input.bid == input.tricks) input.roundBonus else 0
+            val bonusScore = if (game.ruleSet.allowsRoundBonus && input.bid == input.tricks) input.roundBonus else 0
             StoredRoundScore(
                 gameId = game.id,
                 roundNumber = roundNumber,
@@ -113,8 +116,8 @@ class DefaultActiveGameRepository(
     }
 
     private fun validatePlayerNames(playerNames: List<String>): List<String> {
-        require(playerNames.size in MinPlayers..MaxPlayers) {
-            "Active game requires $MinPlayers to $MaxPlayers players"
+        require(playerNames.size in GameConstraints.MinPlayers..GameConstraints.MaxPlayers) {
+            "Active game requires ${GameConstraints.MinPlayers} to ${GameConstraints.MaxPlayers} players"
         }
         return playerNames.map { name ->
             name.trim().also { require(it.isNotEmpty()) { "Player name must not be blank" } }
@@ -167,11 +170,5 @@ class DefaultActiveGameRepository(
             },
             rounds = rounds,
         )
-    }
-
-    companion object {
-        const val DefaultTotalRounds = 10
-        const val MinPlayers = 2
-        const val MaxPlayers = 8
     }
 }

@@ -91,6 +91,45 @@ class ActiveGameRepositoryTest {
     }
 
     @Test
+    fun `a round rejects bids and tricks that exceed its trick limit`() {
+        runBlocking {
+            val game = repository.startNewGame(playerNames = listOf("Anne", "Ben"))
+
+            assertFails<IllegalArgumentException> {
+                repository.saveRound(
+                    roundNumber = 1,
+                    entries = listOf(
+                        RoundPlayerInput(game.players[0].id, bid = 2, tricks = 0, roundBonus = 0),
+                        RoundPlayerInput(game.players[1].id, bid = 0, tricks = 0, roundBonus = 0),
+                    ),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a no-card-bonus rule set ignores manual round bonuses`() {
+        runBlocking {
+            val game = repository.startNewGame(
+                playerNames = listOf("Anne", "Ben"),
+                totalRounds = 1,
+                ruleSet = RuleSet.NoCardBonus,
+            )
+
+            val saved = repository.saveRound(
+                roundNumber = 1,
+                entries = game.players.map { player ->
+                    RoundPlayerInput(player.id, bid = 1, tricks = 1, roundBonus = 30)
+                },
+            )
+
+            assertEquals(RuleSet.NoCardBonus, saved.ruleSet)
+            assertEquals(20, saved.players.first().totalScore)
+            assertEquals(0, saved.rounds.single().scores.first().bonusScore)
+        }
+    }
+
+    @Test
     fun `editing a saved round recalculates later cumulative totals and keeps completed result`() {
         runBlocking {
             val game = repository.startNewGame(playerNames = listOf("Anne", "Ben"), totalRounds = 2)

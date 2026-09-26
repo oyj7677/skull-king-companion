@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oyj.skullking.data.DefaultActiveGameRepository
@@ -38,13 +39,12 @@ import com.oyj.skullking.data.RoomActiveGameStore
 import com.oyj.skullking.data.SkullKingDatabase
 import com.oyj.skullking.domain.ActiveGame
 import com.oyj.skullking.domain.GameStatus
+import com.oyj.skullking.domain.GameConstraints
 import com.oyj.skullking.domain.Player
 import com.oyj.skullking.domain.RoundPlayerInput
+import com.oyj.skullking.domain.RuleSet
 import com.oyj.skullking.presentation.GameViewModel
 import com.oyj.skullking.presentation.GameViewModelFactory
-
-private const val MIN_PLAYERS = 2
-private const val MAX_PLAYERS = 8
 
 class MainActivity : ComponentActivity() {
     private val viewModel: GameViewModel by viewModels {
@@ -56,6 +56,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent { SkullKingApp(viewModel) }
     }
+}
+
+private object ScoreboardColumns {
+    val Player = 150.dp
+    val Bid = 125.dp
+    val Tricks = 125.dp
+    val Bonus = 140.dp
+    val Score = 120.dp
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,9 +116,10 @@ private fun SkullKingApp(viewModel: GameViewModel) {
 }
 
 @Composable
-private fun SetupScreen(onStartGame: (List<String>, Int) -> Unit) {
+private fun SetupScreen(onStartGame: (List<String>, Int, RuleSet) -> Unit) {
     val names = remember { mutableStateListOf("", "") }
-    var totalRounds by rememberSaveable { mutableIntStateOf(10) }
+    var totalRounds by rememberSaveable { mutableIntStateOf(GameConstraints.DefaultTotalRounds) }
+    var ruleSet by rememberSaveable { mutableStateOf(RuleSet.Standard) }
 
     Text("게임 설정", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
     Text("플레이어 구성과 라운드 수는 첫 라운드가 시작되면 변경할 수 없습니다.")
@@ -124,20 +133,34 @@ private fun SetupScreen(onStartGame: (List<String>, Int) -> Unit) {
                     modifier = Modifier.weight(1f),
                     singleLine = true,
                 )
-                if (names.size > MIN_PLAYERS) {
+                if (names.size > GameConstraints.MinPlayers) {
                     TextButton(onClick = { names.removeAt(index) }) { Text("삭제") }
                 }
             }
         }
         item {
-            if (names.size < MAX_PLAYERS) {
+            if (names.size < GameConstraints.MaxPlayers) {
                 TextButton(onClick = { names += "" }) { Text("플레이어 추가") }
             }
         }
     }
     NumberEditor(label = "총 라운드", value = totalRounds, minimum = 1, onValueChange = { totalRounds = it })
+    Text("카드 보너스 규칙", fontWeight = FontWeight.Bold)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        RuleSet.values().forEach { option ->
+            val label = when (option) {
+                RuleSet.Standard -> "성공 시 수동 입력"
+                RuleSet.NoCardBonus -> "카드 보너스 미사용"
+            }
+            if (ruleSet == option) {
+                Button(onClick = { ruleSet = option }) { Text(label) }
+            } else {
+                TextButton(onClick = { ruleSet = option }) { Text(label) }
+            }
+        }
+    }
     Button(
-        onClick = { onStartGame(names.toList(), totalRounds) },
+        onClick = { onStartGame(names.toList(), totalRounds, ruleSet) },
         enabled = names.all { it.isNotBlank() },
         modifier = Modifier.fillMaxWidth(),
     ) { Text("게임 시작") }
@@ -167,13 +190,14 @@ private fun ScoreboardScreen(
     }
     Text("입찰과 획득이 같을 때만 추가점수를 입력할 수 있습니다.")
     ScoreboardHeader()
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(game.players, key = { it.id }) { player ->
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        game.players.forEach { player ->
             val draft = drafts.getValue(player.id)
             RoundInputRow(
                 player = player,
                 draft = draft,
-                maxTricks = roundNumber,
+                roundNumber = roundNumber,
+                allowsRoundBonus = game.ruleSet.allowsRoundBonus,
                 onUpdate = { updated -> drafts = drafts + (player.id to updated) },
             )
         }
@@ -196,51 +220,69 @@ private fun ScoreboardScreen(
 @Composable
 private fun ScoreboardHeader() {
     Row(modifier = Modifier.horizontalScroll(rememberScrollState()).fillMaxWidth()) {
-        HeaderCell("플레이어", 150)
-        HeaderCell("입찰", 125)
-        HeaderCell("획득", 125)
-        HeaderCell("추가점수", 140)
-        HeaderCell("예상 점수", 120)
+        HeaderCell("플레이어", ScoreboardColumns.Player)
+        HeaderCell("입찰", ScoreboardColumns.Bid)
+        HeaderCell("획득", ScoreboardColumns.Tricks)
+        HeaderCell("추가점수", ScoreboardColumns.Bonus)
+        HeaderCell("예상 점수", ScoreboardColumns.Score)
     }
 }
 
 @Composable
-private fun HeaderCell(text: String, width: Int) {
-    Text(text, fontWeight = FontWeight.Bold, modifier = Modifier.width(width.dp).padding(8.dp))
+private fun HeaderCell(text: String, width: Dp) {
+    Text(text, fontWeight = FontWeight.Bold, modifier = Modifier.width(width).padding(8.dp))
 }
 
 @Composable
-private fun RoundInputRow(player: Player, draft: ScoreDraft, maxTricks: Int, onUpdate: (ScoreDraft) -> Unit) {
+private fun RoundInputRow(
+    player: Player,
+    draft: ScoreDraft,
+    roundNumber: Int,
+    allowsRoundBonus: Boolean,
+    onUpdate: (ScoreDraft) -> Unit,
+) {
     val matched = draft.bid != null && draft.bid == draft.tricks
     val preview = if (draft.bid != null && draft.tricks != null) {
         ScoreCalculator.calculate(
-            RoundScoreInput(maxTricks, draft.bid, draft.tricks, if (matched) draft.roundBonus ?: 0 else 0),
+            RoundScoreInput(
+                roundNumber,
+                draft.bid,
+                draft.tricks,
+                if (matched && allowsRoundBonus) draft.roundBonus ?: 0 else 0,
+            ),
         ).totalScore
     } else null
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(player.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.width(150.dp))
-            CompactNumberEditor(draft.bid, maxTricks) { onUpdate(draft.copy(bid = it)) }
-            CompactNumberEditor(draft.tricks, maxTricks) { onUpdate(draft.copy(tricks = it)) }
-            if (matched) {
-                CompactNumberEditor(draft.roundBonus ?: 0, 999) { onUpdate(draft.copy(roundBonus = it)) }
+            Text(player.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.width(ScoreboardColumns.Player))
+            CompactNumberEditor(draft.bid, roundNumber, ScoreboardColumns.Bid) { onUpdate(draft.copy(bid = it)) }
+            CompactNumberEditor(draft.tricks, roundNumber, ScoreboardColumns.Tricks) { onUpdate(draft.copy(tricks = it)) }
+            if (matched && allowsRoundBonus) {
+                CompactNumberEditor(draft.roundBonus ?: 0, 999, ScoreboardColumns.Bonus) { onUpdate(draft.copy(roundBonus = it)) }
             } else {
-                Text("입찰 성공 시 입력", modifier = Modifier.width(140.dp).padding(8.dp), style = MaterialTheme.typography.bodySmall)
+                val message = if (allowsRoundBonus) "입찰 성공 시 입력" else "규칙에서 사용 안 함"
+                Text(message, modifier = Modifier.width(ScoreboardColumns.Bonus).padding(8.dp), style = MaterialTheme.typography.bodySmall)
             }
-            Text(preview?.let(::signedScore) ?: "—", modifier = Modifier.width(120.dp).padding(8.dp), fontWeight = FontWeight.Bold)
+            Text(preview?.let(::signedScore) ?: "—", modifier = Modifier.width(ScoreboardColumns.Score).padding(8.dp), fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
-private fun CompactNumberEditor(value: Int?, maximum: Int, onValueChange: (Int) -> Unit) {
-    Row(modifier = Modifier.width(125.dp), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { onValueChange(((value ?: 0) - 1).coerceAtLeast(0)) }) { Text("−") }
+private fun CompactNumberEditor(value: Int?, maximum: Int, width: Dp, onValueChange: (Int) -> Unit) {
+    Row(modifier = Modifier.width(width), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = { onValueChange(((value ?: 0) - 1).coerceAtLeast(0)) },
+            modifier = Modifier.defaultMinSize(minWidth = 0.dp, minHeight = 0.dp),
+        ) { Text("−") }
         Text(value?.toString() ?: "—", modifier = Modifier.width(30.dp), style = MaterialTheme.typography.titleMedium)
-        TextButton(onClick = { onValueChange(((value ?: -1) + 1).coerceAtMost(maximum)) }) { Text("+") }
+        TextButton(
+            onClick = { onValueChange(((value ?: -1) + 1).coerceAtMost(maximum)) },
+            modifier = Modifier.defaultMinSize(minWidth = 0.dp, minHeight = 0.dp),
+        ) { Text("+") }
     }
 }
 
